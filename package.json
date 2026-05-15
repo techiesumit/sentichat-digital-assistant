@@ -1,19 +1,26 @@
 {
   "name": "sentichat",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "AWS Lex-based member support chatbot with sentiment-based routing.",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --passWithNoTests",
+    "test:watch": "node --experimental-vm-modules node_modules/jest-cli/bin/jest.js --watch",
+    "deploy": "git push origin main"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "jest": {
+    "testEnvironment": "node",
+    "transform": {},
+    "testMatch": [
+      "**/tests/**/*.test.mjs",
+      "**/tests/**/*.test.js"
+    ]
+  },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.1047.0"
+    "@aws-sdk/client-dynamodb": "^3.0.0"
   },
   "devDependencies": {
-    "jest": "^30.4.2"
+    "jest": "^29.7.0",
+    "jest-cli": "^29.7.0"
   }
 }
