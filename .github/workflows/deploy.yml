@@ -7,18 +7,19 @@ on:
         branches: [main]
 
 env:
-    AWS_REGION: us-east-1
-    NODE_VERSION: 24.x
+    AWS_REGION: ${{ vars.AWS_REGION }}
+    NODE_VERSION: "24"
+    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
     test:
         name: Run Tests
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v5
 
             - name: Setup Node.js
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@v5
               with:
                   node-version: ${{ env.NODE_VERSION }}
 
@@ -37,7 +38,7 @@ jobs:
             layer_version_arn: ${{ steps.publish-layer.outputs.layer_arn }}
 
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v5
 
             - name: Configure AWS credentials
               uses: aws-actions/configure-aws-credentials@v4
@@ -84,7 +85,7 @@ jobs:
                       path: functions/SentiChatFallbackHandler
 
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v5
 
             - name: Configure AWS credentials
               uses: aws-actions/configure-aws-credentials@v4
