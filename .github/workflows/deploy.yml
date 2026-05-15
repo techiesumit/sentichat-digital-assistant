@@ -1,114 +1,150 @@
 name: Deploy SentiChat Lambda Functions
 
 on:
-    push:
-        branches: [main]
-    pull_request:
-        branches: [main]
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 env:
-    AWS_REGION: ${{ vars.AWS_REGION }}
-    NODE_VERSION: "24"
-    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  AWS_REGION: us-east-1
+  NODE_VERSION: "24"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  LAMBDA_ROLE: arn:aws:iam::371041973893:role/SentiChatLambdaRole
 
 jobs:
-    test:
-        name: Run Tests
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v5
+  # ── Job 1: Run Tests ─────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v5
-              with:
-                  node-version: ${{ env.NODE_VERSION }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-            - name: Install dependencies
-              run: npm install
+      - name: Install dependencies
+        run: npm install
 
-            - name: Run tests
-              run: npm test
+      - name: Run tests
+        run: npm test
 
-    deploy-layer:
-        name: Deploy Shared Layer
-        needs: test
-        runs-on: ubuntu-latest
-        if: github.ref == 'refs/heads/main'
-        outputs:
-            layer_version_arn: ${{ steps.publish-layer.outputs.layer_arn }}
+  # ── Job 2: Deploy Shared Layer ───────────────────────────────
+  deploy-layer:
+    name: Deploy Shared Layer
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      layer_version_arn: ${{ steps.publish-layer.outputs.layer_arn }}
 
-        steps:
-            - uses: actions/checkout@v5
+    steps:
+      - uses: actions/checkout@v5
 
-            - name: Configure AWS credentials
-              uses: aws-actions/configure-aws-credentials@v4
-              with:
-                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-                  aws-region: ${{ env.AWS_REGION }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-            - name: Zip shared layer
-              run: |
-                  cd layers/SentiChatSharedLayer
-                  zip -r ../../SentiChatSharedLayer.zip nodejs/
+      - name: Zip shared layer
+        run: |
+          cd layers/SentiChatSharedLayer
+          zip -r ../../SentiChatSharedLayer.zip nodejs/
 
-            - name: Publish Lambda layer
-              id: publish-layer
-              run: |
-                  LAYER_ARN=$(aws lambda publish-layer-version \
-                    --layer-name SentiChatSharedLayer \
-                    --zip-file fileb://SentiChatSharedLayer.zip \
-                    --compatible-runtimes nodejs24.x \
-                    --query 'LayerVersionArn' \
-                    --output text)
-                  echo "layer_arn=$LAYER_ARN" >> $GITHUB_OUTPUT
-                  echo "Layer ARN: $LAYER_ARN"
+      - name: Publish Lambda layer
+        id: publish-layer
+        run: |
+          LAYER_ARN=$(aws lambda publish-layer-version \
+            --layer-name SentiChatSharedLayer \
+            --zip-file fileb://SentiChatSharedLayer.zip \
+            --compatible-runtimes nodejs24.x \
+            --query 'LayerVersionArn' \
+            --output text)
+          echo "layer_arn=$LAYER_ARN" >> $GITHUB_OUTPUT
+          echo "Layer ARN: $LAYER_ARN"
 
-    deploy-functions:
-        name: Deploy Lambda Functions
-        needs: deploy-layer
-        runs-on: ubuntu-latest
-        if: github.ref == 'refs/heads/main'
+  # ── Job 3: Deploy Lambda Functions ───────────────────────────
+  deploy-functions:
+    name: Deploy Lambda Functions
+    needs: deploy-layer
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
 
-        strategy:
-            matrix:
-                function:
-                    - name: SentiChatRoutingHandler
-                      path: functions/SentiChatRoutingHandler
-                    - name: SentiChatClaimsHandler
-                      path: functions/SentiChatClaimsHandler
-                    - name: SentiChatProviderHandler
-                      path: functions/SentiChatProviderHandler
-                    - name: SentiChatBenefitsHandler
-                      path: functions/SentiChatBenefitsHandler
-                    - name: SentiChatFallbackHandler
-                      path: functions/SentiChatFallbackHandler
+    strategy:
+      fail-fast: false
+      matrix:
+        function:
+          - name: SentiChatRoutingHandler
+            path: functions/SentiChatRoutingHandler
+          - name: SentiChatClaimsHandler
+            path: functions/SentiChatClaimsHandler
+          - name: SentiChatProviderHandler
+            path: functions/SentiChatProviderHandler
+          - name: SentiChatBenefitsHandler
+            path: functions/SentiChatBenefitsHandler
+          - name: SentiChatFallbackHandler
+            path: functions/SentiChatFallbackHandler
 
-        steps:
-            - uses: actions/checkout@v5
+    steps:
+      - uses: actions/checkout@v5
 
-            - name: Configure AWS credentials
-              uses: aws-actions/configure-aws-credentials@v4
-              with:
-                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-                  aws-region: ${{ env.AWS_REGION }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-            - name: Zip function
-              run: |
-                  cd ${{ matrix.function.path }}
-                  zip -r ../../${{ matrix.function.name }}.zip .
+      - name: Zip function
+        run: |
+          cd ${{ matrix.function.path }}
+          zip -r ../../${{ matrix.function.name }}.zip .
 
-            - name: Deploy to Lambda
-              run: |
-                  aws lambda update-function-code \
-                    --function-name ${{ matrix.function.name }} \
-                    --zip-file fileb://${{ matrix.function.name }}.zip \
-                    --region ${{ env.AWS_REGION }}
+      - name: Create or Update Lambda function
+        run: |
+          FUNCTION_EXISTS=$(aws lambda get-function \
+            --function-name ${{ matrix.function.name }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Configuration.FunctionName' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
 
-            - name: Update layer on function
-              run: |
-                  aws lambda update-function-configuration \
-                    --function-name ${{ matrix.function.name }} \
-                    --layers ${{ needs.deploy-layer.outputs.layer_version_arn }} \
-                    --region ${{ env.AWS_REGION }}
+          if [ "$FUNCTION_EXISTS" = "NOT_FOUND" ]; then
+            echo "Creating new function: ${{ matrix.function.name }}"
+            aws lambda create-function \
+              --function-name ${{ matrix.function.name }} \
+              --runtime nodejs24.x \
+              --role ${{ env.LAMBDA_ROLE }} \
+              --handler index.handler \
+              --zip-file fileb://${{ matrix.function.name }}.zip \
+              --region ${{ env.AWS_REGION }}
+            echo "Waiting for function to become active..."
+            aws lambda wait function-active \
+              --function-name ${{ matrix.function.name }} \
+              --region ${{ env.AWS_REGION }}
+          else
+            echo "Updating existing function: ${{ matrix.function.name }}"
+            aws lambda update-function-code \
+              --function-name ${{ matrix.function.name }} \
+              --zip-file fileb://${{ matrix.function.name }}.zip \
+              --region ${{ env.AWS_REGION }}
+            echo "Waiting for update to complete..."
+            aws lambda wait function-updated \
+              --function-name ${{ matrix.function.name }} \
+              --region ${{ env.AWS_REGION }}
+          fi
+
+      - name: Attach shared layer to function
+        run: |
+          echo "Attaching layer: ${{ needs.deploy-layer.outputs.layer_version_arn }}"
+          aws lambda update-function-configuration \
+            --function-name ${{ matrix.function.name }} \
+            --layers ${{ needs.deploy-layer.outputs.layer_version_arn }} \
+            --region ${{ env.AWS_REGION }}
+          aws lambda wait function-updated \
+            --function-name ${{ matrix.function.name }} \
+            --region ${{ env.AWS_REGION }}
+          echo "Done: ${{ matrix.function.name }}"
