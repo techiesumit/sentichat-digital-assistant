@@ -148,3 +148,194 @@ jobs:
             --function-name ${{ matrix.function.name }} \
             --region ${{ env.AWS_REGION }}
           echo "Done: ${{ matrix.function.name }}"
+  # ── Job 4: Wire Lambda to Lex Intents ────────────────────────
+  configure-lex:
+    name: Wire Lambda to Lex Intents
+    needs: deploy-functions
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    env:
+      BOT_ID: "" # filled by discover step
+      LOCALE_ID: en_US
+      BOT_VERSION: DRAFT
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get Bot ID
+        id: get-bot
+        run: |
+          BOT_ID=$(aws lexv2-models list-bots \
+            --query "botSummaries[?botName=='SentiChatDigitalAssistant'].botId" \
+            --output text)
+          echo "bot_id=$BOT_ID" >> $GITHUB_OUTPUT
+          echo "Bot ID: $BOT_ID"
+
+      - name: Wire CheckClaimStatus → SentiChatClaimsHandler
+        run: |
+          INTENT_ID=$(aws lexv2-models list-intents \
+            --bot-id ${{ steps.get-bot.outputs.bot_id }} \
+            --bot-version DRAFT \
+            --locale-id en_US \
+            --query "intentSummaries[?intentName=='CheckClaimStatus'].intentId" \
+            --output text)
+
+          LAMBDA_ARN=$(aws lambda get-function \
+            --function-name SentiChatClaimsHandler \
+            --query 'Configuration.FunctionArn' \
+            --output text)
+
+          # Get current intent config
+          aws lexv2-models describe-intent \
+            --bot-id ${{ steps.get-bot.outputs.bot_id }} \
+            --bot-version DRAFT \
+            --locale-id en_US \
+            --intent-id $INTENT_ID > /tmp/intent_claims.json
+
+          # Update fulfillment with Lambda
+          cat /tmp/intent_claims.json | \
+          python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          d.pop('creationDateTime', None)
+          d.pop('lastUpdatedDateTime', None)
+          d['fulfillmentCodeHook'] = {'enabled': True, 'fulfillmentUpdatesSpecification': {'active': False}, 'postFulfillmentStatusSpecification': {}}
+          d['dialogCodeHook'] = {'enabled': False}
+          print(json.dumps(d))
+          " > /tmp/intent_claims_updated.json
+
+          aws lexv2-models update-intent \
+            --bot-id ${{ steps.get-bot.outputs.bot_id }} \
+            --bot-version DRAFT \
+            --locale-id en_US \
+            --intent-id $INTENT_ID \
+            --cli-input-json file:///tmp/intent_claims_updated.json
+
+          # Add Lambda permission
+          aws lambda add-permission \
+            --function-name SentiChatClaimsHandler \
+            --statement-id LexInvoke-CheckClaimStatus \
+            --action lambda:InvokeFunction \
+            --principal lexv2.amazonaws.com \
+            --source-arn "arn:aws:lex:${{ env.AWS_REGION }}:371041973893:bot-alias/${{ steps.get-bot.outputs.bot_id }}/*" \
+            2>/dev/null || echo "Permission already exists"
+
+          echo "✅ CheckClaimStatus wired to SentiChatClaimsHandler"
+
+      - name: Wire FindProvider → SentiChatProviderHandler
+        run: |
+          INTENT_ID=$(aws lexv2-models list-intents \
+            --bot-id ${{ steps.get-bot.outputs.bot_id }} \
+            --bot-version DRAFT \
+            --locale-id en_US \
+            --query "intentSummaries[?intentName=='FindProvider'].intentId" \
+            --output text)
+
+          aws lambda add-permission \
+            --function-name SentiChatProviderHandler \
+            --statement-id LexInvoke-FindProvider \
+            --action lambda:InvokeFunction \
+            --principal lexv2.amazonaws.com \
+            --source-arn "arn:aws:lex:${{ env.AWS_REGION }}:371041973893:bot-alias/${{ steps.get-bot.outputs.bot_id }}/*" \
+            2>/dev/null || echo "Permission already exists"
+
+          echo "✅ FindProvider wired to SentiChatProviderHandler"
+
+      - name: Wire ExplainBenefits → SentiChatBenefitsHandler
+        run: |
+          INTENT_ID=$(aws lexv2-models list-intents \
+            --bot-id ${{ steps.get-bot.outputs.bot_id }} \
+            --bot-version DRAFT \
+            --locale-id en_US \
+            --query "intentSummaries[?intentName=='ExplainBenefits'].intentId" \
+            --output text)
+
+          aws lambda add-permission \
+            --function-name SentiChatBenefitsHandler \
+            --statement-id LexInvoke-ExplainBenefits \
+            --action lambda:InvokeFunction \
+            --principal lexv2.amazonaws.com \
+            --source-arn "arn:aws:lex:${{ env.AWS_REGION }}:371041973893:bot-alias/${{ steps.get-bot.outputs.bot_id }}/*" \
+            2>/dev/null || echo "Permission already exists"
+
+          echo "✅ ExplainBenefits wired to SentiChatBenefitsHandler"
+
+      - name: Wire FallbackIntent → SentiChatFallbackHandler
+        run: |
+          aws lambda add-permission \
+            --function-name SentiChatFallbackHandler \
+            --statement-id LexInvoke-FallbackIntent \
+            --action lambda:InvokeFunction \
+            --principal lexv2.amazonaws.com \
+            --source-arn "arn:aws:lex:${{ env.AWS_REGION }}:371041973893:bot-alias/${{ steps.get-bot.outputs.bot_id }}/*" \
+            2>/dev/null || echo "Permission already exists"
+
+          echo "✅ FallbackIntent wired to SentiChatFallbackHandler"
+
+      - name: Wire Alias-level → SentiChatRoutingHandler
+        run: |
+          BOT_ID=${{ steps.get-bot.outputs.bot_id }}
+
+          ALIAS_ID=$(aws lexv2-models list-bot-aliases \
+            --bot-id $BOT_ID \
+            --query "botAliasSummaries[?botAliasName=='TestBotAlias'].botAliasId" \
+            --output text)
+
+          LAMBDA_ARN=$(aws lambda get-function \
+            --function-name SentiChatRoutingHandler \
+            --query 'Configuration.FunctionArn' \
+            --output text)
+
+          aws lexv2-models update-bot-alias \
+            --bot-id $BOT_ID \
+            --bot-alias-id $ALIAS_ID \
+            --bot-alias-name TestBotAlias \
+            --bot-version DRAFT \
+            --bot-alias-locale-settings "{\"en_US\":{\"enabled\":true,\"codeHookSpecification\":{\"lambdaCodeHook\":{\"lambdaARN\":\"$LAMBDA_ARN\",\"codeHookInterfaceVersion\":\"1.0\"}}}}"
+
+          aws lambda add-permission \
+            --function-name SentiChatRoutingHandler \
+            --statement-id LexInvoke-Alias \
+            --action lambda:InvokeFunction \
+            --principal lexv2.amazonaws.com \
+            --source-arn "arn:aws:lex:${{ env.AWS_REGION }}:371041973893:bot-alias/$BOT_ID/*" \
+            2>/dev/null || echo "Permission already exists"
+
+          echo "✅ TestBotAlias wired to SentiChatRoutingHandler"
+
+      - name: Build Lex Bot
+        run: |
+          BOT_ID=${{ steps.get-bot.outputs.bot_id }}
+
+          aws lexv2-models build-bot-locale \
+            --bot-id $BOT_ID \
+            --bot-version DRAFT \
+            --locale-id en_US
+
+          echo "⏳ Waiting for bot build to complete..."
+
+          for i in {1..20}; do
+            STATUS=$(aws lexv2-models describe-bot-locale \
+              --bot-id $BOT_ID \
+              --bot-version DRAFT \
+              --locale-id en_US \
+              --query 'botLocaleStatus' \
+              --output text)
+            echo "Build status: $STATUS"
+            if [ "$STATUS" = "Built" ]; then
+              echo "✅ Bot built successfully"
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "❌ Bot build failed"
+              exit 1
+            fi
+            sleep 15
+          done
